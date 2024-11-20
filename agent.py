@@ -21,7 +21,6 @@ workflow.add_node("action", tool_node)
 # Set the entrypoint as `agent`
 # This means that this node is the first one called
 workflow.set_entry_point("agent")
-
 # We now add a conditional edge
 workflow.add_conditional_edges(
     # First, we define the start node. We use `agent`.
