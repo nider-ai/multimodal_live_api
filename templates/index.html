@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gemini Live Audio</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        .container {
+            text-align: center;
+            padding: 20px;
+        }
+        .status {
+            margin: 20px 0;
+            font-size: 1.2em;
+            color: #666;
+        }
+        .controls {
+            margin: 20px 0;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 1.1em;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Gemini Live Audio Stream</h1>
+        <div class="status" id="status">Waiting for audio...</div>
+        <div class="controls">
+            <button onclick="startAudio()">Start Audio</button>
+        </div>
+    </div>
+
+    <script>
+        const statusElement = document.getElementById('status');
+        let isPlaying = false;
+        let audioContext;
+        let audioStreamer;
+        let ws;
+
+        class AudioStreamer {
+            constructor(audioContext) {
+                this.audioContext = audioContext;
+                this.bufferSize = 4096;
+                this.scriptNode = this.audioContext.createScriptProcessor(this.bufferSize, 1, 1);
+                this.pcmBuffer = new Float32Array(0);
+                this.isPlaying = false;
+
+                this.scriptNode.onaudioprocess = (e) => this.processAudio(e);
+            }
+
+            processAudio(e) {
+                const output = e.outputBuffer.getChannelData(0);
+                
+                if (this.pcmBuffer.length >= this.bufferSize) {
+                    output.set(this.pcmBuffer.subarray(0, this.bufferSize));
+                    this.pcmBuffer = this.pcmBuffer.subarray(this.bufferSize);
+                    this.isPlaying = true;
+                } else {
+                    output.fill(0);
+                    this.isPlaying = false;
+                }
+            }
+
+            addPCM16(uint8Array) {
+                const pcm16 = new Int16Array(uint8Array.buffer);
+                const float32 = new Float32Array(pcm16.length);
+                
+                for (let i = 0; i < pcm16.length; i++) {
+                    float32[i] = pcm16[i] / 32768.0;
+                }
+                
+                const newBuffer = new Float32Array(this.pcmBuffer.length + float32.length);
+                newBuffer.set(this.pcmBuffer);
+                newBuffer.set(float32, this.pcmBuffer.length);
+                this.pcmBuffer = newBuffer;
+                
+                this.resume();
+            }
+
+            resume() {
+                if (!this.isPlaying) {
+                    this.scriptNode.connect(this.audioContext.destination);
+                }
+            }
+
+            stop() {
+                this.scriptNode.disconnect();
+                this.pcmBuffer = new Float32Array(0);
+                this.isPlaying = false;
+            }
+
+            complete() {
+                if (this.pcmBuffer.length === 0) {
+                    this.stop();
+                }
+            }
+        }
+
+        async function getAudioConfig() {
+            const response = await fetch('/audio-config');
+            return await response.json();
+        }
+
+        async function setupAudioContext() {
+            const config = await getAudioConfig();
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: config.sampleRate
+            });
+            audioStreamer = new AudioStreamer(audioContext);
+            await audioContext.resume();
+            return config;
+        }
+
+        function base64ToArrayBuffer(base64) {
+            const binaryString = atob(base64);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes;
+        }
+
+        async function startAudio() {
+            if (isPlaying) return;
+            isPlaying = true;
+            
+            try {
+                await setupAudioContext();
+                
+                // Connect to WebSocket server
+                ws = new WebSocket('ws://localhost:8765');
+                
+                ws.onopen = () => {
+                    statusElement.textContent = 'Connected to audio stream...';
+                };
+                
+                ws.onmessage = async (event) => {
+                    try {
+                        const uint8Array = base64ToArrayBuffer(event.data);
+                        audioStreamer.addPCM16(uint8Array);
+                        if (!audioStreamer.isPlaying) {
+                            statusElement.textContent = 'Playing audio...';
+                        }
+                    } catch (error) {
+                        console.error('Error processing audio chunk:', error);
+                    }
+                };
+                
+                ws.onclose = () => {
+                    statusElement.textContent = 'Connection closed';
+                    isPlaying = false;
+                };
+                
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    statusElement.textContent = 'Error in connection';
+                    isPlaying = false;
+                };
+                
+            } catch (error) {
+                console.error('Error:', error);
+                statusElement.textContent = 'Error playing audio';
+                isPlaying = false;
+            }
+        }
+    </script>
+</body>
+</html> 
