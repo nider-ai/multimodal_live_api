@@ -3,6 +3,7 @@ import asyncio
 from gemini_live import AudioLoop, FORMAT, CHANNELS, RECEIVE_SAMPLE_RATE
 import threading
 import logging
+import time
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -37,17 +38,39 @@ def audio_stream_generator():
     init_gemini()  # Start Gemini Live
     logger.info("Audio stream generator started")
 
+    last_chunk_time = None
+    empty_count = 0
+
     while True:
         if audio_loop and audio_loop.audio_in_queue:
             try:
                 data = audio_loop.audio_in_queue.get_nowait()
                 if data:
                     logger.info(f"Sending audio chunk of size: {len(data)} bytes")
+                    last_chunk_time = asyncio.get_event_loop().time()
+                    empty_count = 0
                     yield data
+                else:
+                    # Empty data handling
+                    empty_count += 1
+                    yield b""
             except asyncio.QueueEmpty:
-                yield b""
+                # Check if we're at the end of a response (small gap)
+                current_time = asyncio.get_event_loop().time()
+                if last_chunk_time and (current_time - last_chunk_time < 1.0):
+                    # We're possibly between chunks, add a small delay
+                    yield b""
+                elif empty_count > 30:  # Reset after too many empty chunks
+                    last_chunk_time = None
+                    empty_count = 0
+                    yield b""
+                else:
+                    empty_count += 1
+                    yield b""
         else:
             yield b""
+            # Small delay to prevent CPU overuse
+            time.sleep(0.01)
 
 
 @app.route("/")

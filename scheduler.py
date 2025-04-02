@@ -13,8 +13,38 @@ SCOPES = [
     "https://www.googleapis.com/auth/calendar.readonly",
 ]
 
+# Define tool schema for meeting scheduling
+schedule_meeting_schema = {
+    "name": "schedule_meeting",
+    "description": """Schedule a meeting on the user's calendar. 
+            Creates a Google Calendar event.""",
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "user_email": {
+                "type": "STRING",
+                "description": "Email of the user scheduling the meeting",
+            },
+            "start_time": {
+                "type": "STRING",
+                "description": """ISO format datetime string for meeting 
+                        start time. Include timezone, which is London.""",
+            },
+            "summary": {
+                "type": "STRING",
+                "description": "Meeting summary/title",
+            },
+            "description": {
+                "type": "STRING",
+                "description": "Meeting description",
+            },
+        },
+        "required": ["start_time", "summary"],
+    },
+}
 
-def schedule_meeting(user_email, start_time, summary, description=""):
+
+def schedule_meeting(start_time, summary, user_email="pablo@nider.ai", description=""):
     """Schedule a meeting on the user's calendar.
 
     Creates a Google Calendar event.

@@ -20,6 +20,9 @@ async def handle_websocket(websocket):
             asyncio.create_task(audio_loop.run())
             logger.info("Started Gemini Live")
 
+        last_data_time = None
+        empty_count = 0
+
         while True:
             if audio_loop.audio_in_queue:
                 try:
@@ -28,9 +31,25 @@ async def handle_websocket(websocket):
                         # Convert binary PCM to base64
                         base64_data = base64.b64encode(data).decode("utf-8")
                         await websocket.send(base64_data)
-                        logger.info(f"Sent audio chunk of size: {len(data)} bytes")
+                        logger.info(f"Sent audio chunk: {len(data)} bytes")
+                        last_data_time = asyncio.get_event_loop().time()
+                        empty_count = 0
+                    else:
+                        # Handle empty data
+                        empty_count += 1
+                        await asyncio.sleep(0.01)
                 except asyncio.QueueEmpty:
-                    await asyncio.sleep(0.01)  # Small delay to prevent busy waiting
+                    # Check if we're possibly at the end of a response
+                    current_time = asyncio.get_event_loop().time()
+                    if last_data_time and (current_time - last_data_time < 1.0):
+                        # Short pause, possibly between chunks
+                        await asyncio.sleep(0.02)  # Slightly longer pause
+                    else:
+                        # Normal empty queue handling
+                        await asyncio.sleep(0.01)
+                        if empty_count > 50:  # Reset after too many empty reads
+                            last_data_time = None
+                            empty_count = 0
             else:
                 await asyncio.sleep(0.01)
 

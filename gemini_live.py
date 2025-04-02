@@ -1,50 +1,3 @@
-# -*- coding: utf-8 -*-
-# Copyright 2023 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""
-## Setup
-
-To install the dependencies for this script, run:
-
-``` 
-pip install google-genai opencv-python pyaudio pillow mss
-```
-
-Before running this script, ensure the `GOOGLE_API_KEY` environment
-variable is set to the api-key you obtained from Google AI Studio.
-
-Important: **Use headphones**. This script uses the system default audio
-input and output, which often won't include echo cancellation. So to prevent
-the model from interrupting itself it is important that you use headphones. 
-
-## Run
-
-To run the script:
-
-```
-python live_api_starter.py
-```
-
-The script takes a video-mode flag `--mode`, this can be "camera", "screen", or "none".
-The default is "camera". To share your screen run:
-
-```
-python live_api_starter.py --mode screen
-```
-"""
-
 import asyncio
 import base64
 from datetime import datetime
@@ -63,8 +16,21 @@ import argparse
 from google import genai
 from dotenv import load_dotenv
 from google.genai import types
-
-from scheduler import schedule_meeting
+from google.genai.types import (
+    Content,
+    LiveConnectConfig,
+    Part,
+    PrebuiltVoiceConfig,
+    SpeechConfig,
+    VoiceConfig,
+    LiveClientToolResponse,
+    FunctionResponse,
+    Tool,
+    ToolCodeExecution,
+    FunctionDeclaration,
+    GoogleSearch,
+)
+from scheduler import schedule_meeting, schedule_meeting_schema
 
 load_dotenv()
 
@@ -80,14 +46,34 @@ SEND_SAMPLE_RATE = 16000
 RECEIVE_SAMPLE_RATE = 24000
 CHUNK_SIZE = 1024
 
-MODEL = "models/gemini-2.0-flash-exp"
+MODEL = "gemini-2.0-flash-exp"
 
 DEFAULT_MODE = "none"
 
 
-client = genai.Client(http_options={"api_version": "v1alpha"})
+client = genai.Client(
+    vertexai=True,
+    project="third-pad-435413-t0",
+    location="us-central1",
+    # http_options={"api_version": "v1alpha"},
+)
 
 pya = pyaudio.PyAudio()
+
+
+def get_tools():
+    meeting_tool = FunctionDeclaration(
+        name=schedule_meeting_schema["name"],
+        description=schedule_meeting_schema["description"],
+        parameters=schedule_meeting_schema["parameters"],
+    )
+    tool = Tool(function_declarations=[meeting_tool])
+    # code_execution_tool = Tool(code_execution=ToolCodeExecution())
+    # Commented out to avoid unused variable warning
+    # google_search = Tool(google_search=GoogleSearch())
+
+    # Return only one tool - choose which one you want to use
+    return [tool]  # Uncomment and use [google_search] if you prefer Google Search
 
 
 class AudioLoop:
@@ -265,6 +251,9 @@ class AudioLoop:
                 if tool_call is not None:
                     await self.handle_tool_call(self.session, tool_call)
 
+            # Add a small delay before clearing the queue to allow last audio chunk to play
+            await asyncio.sleep(0.5)
+
             # Clear audio queue on model interruption
             while not self.audio_in_queue.empty():
                 self.audio_in_queue.get_nowait()
@@ -293,7 +282,6 @@ class AudioLoop:
         for fc in tool_call.function_calls:
             if fc.name == "schedule_meeting":
                 meeting = schedule_meeting(
-                    user_email=fc.args["user_email"],
                     summary=fc.args["summary"],
                     start_time=fc.args["start_time"],
                 )
@@ -339,50 +327,21 @@ class AudioLoop:
         Main execution method that sets up and runs all the async tasks
         for handling audio, video, and model interaction.
         """
-        # Define tool schema for meeting scheduling
-        schedule_meeting = {
-            "name": "schedule_meeting",
-            "description": """Schedule a meeting on the user's calendar. 
-            Creates a Google Calendar event.""",
-            "parameters": {
-                "type": "OBJECT",
-                "properties": {
-                    "user_email": {
-                        "type": "STRING",
-                        "description": "Email of the user scheduling the meeting",
-                    },
-                    "start_time": {
-                        "type": "STRING",
-                        "description": """ISO format datetime string for meeting 
-                        start time. Include timezone, which is London.""",
-                    },
-                    "summary": {
-                        "type": "STRING",
-                        "description": "Meeting summary/title",
-                    },
-                    "description": {
-                        "type": "STRING",
-                        "description": "Meeting description",
-                    },
-                },
-                "required": ["user_email", "start_time", "summary"],
-            },
-        }
-
-        # Configure model tools and response settings
-        tools = [
-            {
-                "function_declarations": [schedule_meeting],
-                "google_search": {},
-                "code_execution": {},
-            }
-        ]
+        tools = get_tools()
         current_date = datetime.now().strftime("%Y-%m-%d")
         system_instruction = f"You are a helpful assistant that can schedule meetings on the user's calendar, execute code and search the web. Today is {current_date}."
+
         CONFIG = {
-            "system_instruction": system_instruction,
+            "system_instruction": Content(
+                parts=[
+                    (
+                        Part.from_text(text=system_instruction)
+                        if system_instruction
+                        else None
+                    )
+                ]
+            ),
             "tools": tools,
-            "generation_config": {"response_modalities": ["AUDIO"]},
         }
 
         try:
